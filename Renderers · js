@@ -1,0 +1,204 @@
+/**
+ * canvas/renderers.js
+ * All Canvas 2D rendering: decision boundary, loss/acc charts, network graph
+ */
+
+const COLORS = {
+  blue:   '#4f9eff',
+  coral:  '#ff6b6b',
+  purple: '#8b6fff',
+  teal:   '#29d9b4',
+  amber:  '#f5a623',
+  bg:     '#141417',
+  bg3:    '#1c1c21',
+  border: 'rgba(255,255,255,0.08)',
+  text:   '#8888a0',
+};
+
+// ─── Decision Boundary ───────────────────────────────────────────────────────
+
+export function drawBoundary(canvas, gridPreds, dataset, resolution = 60) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Background boundary
+  if (gridPreds) {
+    const cellW = W / resolution;
+    const cellH = H / resolution;
+    for (let row = 0; row < resolution; row++) {
+      for (let col = 0; col < resolution; col++) {
+        const idx = row * resolution + col;
+        const val = gridPreds[idx]; // 0–1
+        const r = Math.round(lerp(20, 79, val));
+        const g = Math.round(lerp(20, 158, val));
+        const b = Math.round(lerp(20, 255, val));
+        const a = 0.55;
+        ctx.fillStyle = `rgba(${lerp(79, 255, val)},${lerp(155, 107, val)},${lerp(255, 107, val)},0.55)`;
+        ctx.fillRect(col * cellW, row * cellH, cellW + 1, cellH + 1);
+      }
+    }
+  }
+
+  if (!dataset) return;
+
+  // Data points
+  const { X, y } = dataset;
+  const pad = 20;
+  const toCanvasX = v => pad + ((v + 1.5) / 3) * (W - pad * 2);
+  const toCanvasY = v => H - pad - ((v + 1.5) / 3) * (H - pad * 2);
+
+  X.forEach(([x1, x2], i) => {
+    const cx = toCanvasX(x1);
+    const cy = toCanvasY(x2);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+    ctx.fillStyle = y[i] === 0 ? COLORS.blue : COLORS.coral;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+  });
+}
+
+function lerp(a, b, t) { return a + (b - a) * Math.max(0, Math.min(1, t)); }
+
+// ─── Loss / Accuracy Charts ───────────────────────────────────────────────────
+
+export function drawChart(canvas, history, label, color, yMin = 0, yMax = 1) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const padL = 34, padR = 8, padT = 10, padB = 20;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = COLORS.border;
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (chartH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + chartW, y); ctx.stroke();
+    const val = yMax - ((yMax - yMin) / 4) * i;
+    ctx.fillStyle = COLORS.text;
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val.toFixed(2), padL - 4, y + 3);
+  }
+
+  // Axis label
+  ctx.fillStyle = COLORS.text;
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, padL, H - 4);
+
+  if (history.length < 2) return;
+
+  // Line
+  const toX = i => padL + (i / (history.length - 1)) * chartW;
+  const toY = v => padT + (1 - (v - yMin) / (yMax - yMin)) * chartH;
+
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  history.forEach((v, i) => {
+    const x = toX(i), y = toY(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Fill under line
+  ctx.lineTo(toX(history.length - 1), padT + chartH);
+  ctx.lineTo(padL, padT + chartH);
+  ctx.closePath();
+  ctx.fillStyle = color + '22';
+  ctx.fill();
+
+  // Latest value dot
+  const lastX = toX(history.length - 1);
+  const lastY = toY(history[history.length - 1]);
+  ctx.beginPath();
+  ctx.arc(lastX, lastY, 3, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+// ─── Network Graph ────────────────────────────────────────────────────────────
+
+export function drawNetwork(canvas, layerDefs) {
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Build layer sizes
+  const sizes = [2]; // input layer
+  for (const def of layerDefs) {
+    if (def.type === 'dense') sizes.push(Math.min(def.units, 8));
+    else if (def.type === 'dropout') sizes.push(sizes[sizes.length - 1]);
+  }
+  sizes.push(1); // output
+
+  const numLayers = sizes.length;
+  const maxUnits = Math.max(...sizes);
+  const nodeR = 9;
+  const layerGap = (W - 32) / (numLayers - 1);
+
+  // All node positions
+  const positions = sizes.map((count, li) => {
+    const x = 16 + li * layerGap;
+    return Array.from({ length: count }, (_, ni) => ({
+      x,
+      y: H / 2 + (ni - (count - 1) / 2) * ((H - 32) / maxUnits),
+    }));
+  });
+
+  // Connections (sample to avoid overclutter)
+  ctx.lineWidth = 0.5;
+  for (let li = 0; li < positions.length - 1; li++) {
+    const src = positions[li], dst = positions[li + 1];
+    src.forEach(s => {
+      dst.forEach(d => {
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(d.x, d.y);
+        ctx.strokeStyle = 'rgba(139,111,255,0.12)';
+        ctx.stroke();
+      });
+    });
+  }
+
+  // Nodes
+  positions.forEach((layer, li) => {
+    const isInput = li === 0;
+    const isOutput = li === positions.length - 1;
+    layer.forEach(({ x, y }) => {
+      ctx.beginPath();
+      ctx.arc(x, y, nodeR, 0, Math.PI * 2);
+      if (isInput) {
+        ctx.fillStyle = COLORS.teal + 'cc';
+        ctx.strokeStyle = COLORS.teal;
+      } else if (isOutput) {
+        ctx.fillStyle = COLORS.amber + 'cc';
+        ctx.strokeStyle = COLORS.amber;
+      } else {
+        ctx.fillStyle = COLORS.purple + 'cc';
+        ctx.strokeStyle = COLORS.purple;
+      }
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    });
+  });
+
+  // Labels
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  const labels = ['Input', ...layerDefs.map(d => d.type[0].toUpperCase()), 'Out'];
+  positions.forEach((layer, li) => {
+    const x = layer[0].x;
+    ctx.fillStyle = COLORS.text;
+    ctx.fillText(labels[li] ?? '', x, H - 2);
+  });
+}
