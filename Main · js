@@ -1,0 +1,246 @@
+/**
+ * main.js — Neural Playground entry point
+ * Wires together: LayerEditor, NeuralModel, renderers, dataset, controls
+ */
+
+import { NeuralModel }   from './core/model.js';
+import { LayerEditor }   from './ui/layerEditor.js';
+import { DrawCanvas }    from './canvas/drawCanvas.js';
+import { generateDataset } from './data/datasets.js';
+import { drawBoundary, drawChart, drawNetwork } from './canvas/renderers.js';
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+const model   = new NeuralModel();
+let dataset   = null;
+let activeDataset = 'xor';
+let isTraining = false;
+
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+
+const $ = id => document.getElementById(id);
+
+const boundaryCanvas = $('boundary-canvas');
+const lossChartEl    = $('loss-chart');
+const accChartEl     = $('acc-chart');
+const networkCanvas  = $('network-canvas');
+const drawCanvasEl   = $('draw-canvas');
+
+const btnTrain  = $('btn-train');
+const btnReset  = $('btn-reset');
+const btnSave   = $('btn-save');
+const btnLoad   = $('btn-load');
+const btnExport = $('btn-export');
+const btnInfer  = $('btn-infer');
+const btnClearDraw = $('btn-clear-draw');
+
+const epochNum  = $('epoch-num');
+const lossVal   = $('loss-val');
+const accVal    = $('acc-val');
+const inferResult = $('infer-result');
+
+// Sliders
+const noiseSlider  = $('noise-slider');
+const pointsSlider = $('points-slider');
+const lrSlider     = $('lr-slider');
+const epochsSlider = $('epochs-slider');
+const batchSlider  = $('batch-slider');
+const optimSelect  = $('optimizer-select');
+
+// ─── Layer Editor ─────────────────────────────────────────────────────────────
+
+const layerEditor = new LayerEditor(
+  $('layer-list'), $('layer-type'), $('btn-add-layer'),
+  $('param-count'), $('layer-count'),
+  (layers) => {
+    rebuildModel(layers);
+    drawNetwork(networkCanvas, layers);
+  }
+);
+
+// ─── Dataset Controls ─────────────────────────────────────────────────────────
+
+document.querySelectorAll('.btn-dataset').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.btn-dataset').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeDataset = btn.dataset.dataset;
+    reloadDataset();
+  });
+});
+
+noiseSlider.addEventListener('input', () => {
+  $('noise-val').textContent = parseFloat(noiseSlider.value).toFixed(2);
+  reloadDataset();
+});
+pointsSlider.addEventListener('input', () => {
+  $('points-val').textContent = pointsSlider.value;
+  reloadDataset();
+});
+
+function reloadDataset() {
+  const noise  = parseFloat(noiseSlider.value);
+  const points = parseInt(pointsSlider.value);
+  dataset = generateDataset(activeDataset, points, noise);
+  drawBoundary(boundaryCanvas, null, dataset);
+}
+
+// ─── Hyperparameter Controls ──────────────────────────────────────────────────
+
+lrSlider.addEventListener('input', () => {
+  const val = Math.pow(10, parseFloat(lrSlider.value));
+  $('lr-val').textContent = val.toFixed(4);
+});
+epochsSlider.addEventListener('input', () => $('epochs-val').textContent = epochsSlider.value);
+batchSlider.addEventListener('input', () => $('batch-val').textContent = batchSlider.value);
+
+function getLR()     { return Math.pow(10, parseFloat(lrSlider.value)); }
+function getEpochs() { return parseInt(epochsSlider.value); }
+function getBatch()  { return parseInt(batchSlider.value); }
+function getOpt()    { return optimSelect.value; }
+
+// ─── Model Building ───────────────────────────────────────────────────────────
+
+function rebuildModel(layers) {
+  model.buildModel(layers);
+  model.compile(getOpt(), getLR());
+  $('param-count').textContent = formatParams(model.countParams());
+  drawNetwork(networkCanvas, layers);
+}
+
+function formatParams(n) {
+  return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : n;
+}
+
+// ─── Training ─────────────────────────────────────────────────────────────────
+
+btnTrain.addEventListener('click', async () => {
+  if (isTraining) {
+    model.stopTraining();
+    isTraining = false;
+    btnTrain.textContent = '▶ Train';
+    btnTrain.disabled = false;
+    return;
+  }
+
+  if (!dataset) reloadDataset();
+
+  model.compile(getOpt(), getLR());
+  isTraining = true;
+  btnTrain.textContent = '■ Stop';
+
+  await model.train({
+    X: dataset.X,
+    y: dataset.y,
+    epochs: getEpochs(),
+    batchSize: getBatch(),
+    onEpochEnd: (epoch, logs, lossHist, accHist) => {
+      epochNum.textContent = epoch + 1;
+      lossVal.textContent  = logs.loss.toFixed(4);
+      accVal.textContent   = ((logs.acc ?? logs.accuracy ?? 0) * 100).toFixed(1) + '%';
+
+      // Render boundary every 5 epochs
+      if (epoch % 5 === 0 || epoch === getEpochs() - 1) {
+        const grid = model.predictGrid(60);
+        drawBoundary(boundaryCanvas, grid, dataset, 60);
+      }
+
+      drawChart(lossChartEl, lossHist, 'Loss', '#ff6b6b');
+      drawChart(accChartEl, accHist, 'Accuracy', '#29d9b4', 0, 1);
+    },
+  });
+
+  isTraining = false;
+  btnTrain.textContent = '▶ Train';
+
+  // Final boundary pass
+  const grid = model.predictGrid(60);
+  drawBoundary(boundaryCanvas, grid, dataset, 60);
+});
+
+// ─── Reset ────────────────────────────────────────────────────────────────────
+
+btnReset.addEventListener('click', () => {
+  model.stopTraining();
+  isTraining = false;
+  btnTrain.textContent = '▶ Train';
+  epochNum.textContent = '0';
+  lossVal.textContent  = '—';
+  accVal.textContent   = '—';
+  const ctx1 = lossChartEl.getContext('2d');
+  const ctx2 = accChartEl.getContext('2d');
+  ctx1.clearRect(0, 0, lossChartEl.width, lossChartEl.height);
+  ctx2.clearRect(0, 0, accChartEl.width, accChartEl.height);
+  rebuildModel(layerEditor.getLayers());
+  reloadDataset();
+});
+
+// ─── Save / Load / Export ─────────────────────────────────────────────────────
+
+btnSave.addEventListener('click', async () => {
+  await model.saveToIndexedDB();
+  showToast('Model saved to IndexedDB');
+});
+
+btnLoad.addEventListener('click', async () => {
+  const ok = await model.loadFromIndexedDB();
+  showToast(ok ? 'Model loaded!' : 'No saved model found');
+  if (ok) {
+    const grid = model.predictGrid(60);
+    drawBoundary(boundaryCanvas, grid, dataset, 60);
+  }
+});
+
+btnExport.addEventListener('click', async () => {
+  const json = await model.exportJSON();
+  if (!json) return;
+  const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'neural-playground-model.json';
+  a.click(); URL.revokeObjectURL(url);
+});
+
+// ─── Draw Inference ───────────────────────────────────────────────────────────
+
+const drawCanvas = new DrawCanvas(drawCanvasEl);
+
+btnInfer.addEventListener('click', () => {
+  const centroid = drawCanvas.getCentroid();
+  if (!centroid) { inferResult.textContent = 'Draw something first'; return; }
+  const prob = model.predict(centroid.x1, centroid.x2);
+  if (prob === null) { inferResult.textContent = 'Train a model first'; return; }
+  const cls  = prob > 0.5 ? 1 : 0;
+  const conf = (Math.max(prob, 1 - prob) * 100).toFixed(1);
+  inferResult.innerHTML = `Class <strong>${cls}</strong> &nbsp;·&nbsp; ${conf}% confidence`;
+});
+
+btnClearDraw.addEventListener('click', () => {
+  drawCanvas.clear();
+  inferResult.textContent = '';
+});
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+    background: '#29d9b4', color: '#0d0d0f', padding: '8px 20px',
+    borderRadius: '99px', fontSize: '13px', fontWeight: '600',
+    zIndex: '999', boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+    transition: 'opacity 0.3s',
+  });
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2000);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+(function init() {
+  reloadDataset();
+  rebuildModel(layerEditor.getLayers());
+  drawChart(lossChartEl, [], 'Loss', '#ff6b6b');
+  drawChart(accChartEl, [], 'Accuracy', '#29d9b4');
+})();
