@@ -2,7 +2,7 @@
 
 > A visual ML experimentation studio that runs **100% in the browser** — no backend, no install, no Python.
 
-<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/c1d1974e-ef69-41c7-bbdd-9a5f468b5beb" />
+
 <img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/88c33546-df0f-4c67-9f0b-1d93f10882b7" />
 <img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/ad7e74e0-d15f-4cf3-bbde-914a570c8807" />
 
